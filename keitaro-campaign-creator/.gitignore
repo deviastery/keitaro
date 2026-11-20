@@ -1,0 +1,15 @@
+# Секреты и локальная БД
+.env
+*.db
+*.sqlite3
+
+# Python и тесты
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Виртуальные окружения и IDE
+.venv/
+venv/
+.idea/
+.vscode/

@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New campaign</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        padding: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font:
+          14px/1.4 Arial,
+          Helvetica,
+          sans-serif;
+        color: #000;
+        background: #fff;
+      }
+      form {
+        width: 100%;
+        max-width: 520px;
+      }
+      h1 {
+        margin: 0 0 28px;
+        font-size: 14px;
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        align-items: start;
+        margin-bottom: 22px;
+      }
+      .row > label {
+        padding-top: 5px;
+      }
+
+      input,
+      textarea {
+        display: block;
+        width: 100%;
+        padding: 4px 6px;
+        font: inherit;
+        color: #000;
+        background: #fff;
+        border: 1px solid #000;
+        border-radius: 0;
+      }
+      textarea {
+        height: 46px;
+        resize: none;
+      }
+      input:focus,
+      textarea:focus {
+        outline: 2px solid #9bbcf5;
+        outline-offset: 0;
+      }
+      ::placeholder {
+        color: #444;
+        opacity: 1;
+      }
+
+      .combo {
+        position: relative;
+      }
+      .options {
+        position: absolute;
+        z-index: 10;
+        left: 0;
+        right: 0;
+        top: 100%;
+        max-height: 320px;
+        overflow-y: auto;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        background: #fff;
+        border: 1px solid #aaa;
+        border-top: 0;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+      }
+      .options[hidden] {
+        display: none;
+      }
+      .options li {
+        padding: 6px 8px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .options li.active {
+        background: #5897fb;
+        color: #fff;
+      }
+      .options li.note {
+        color: #666;
+        cursor: default;
+        white-space: normal;
+      }
+      .options li.note.error {
+        color: #b00020;
+      }
+
+      button {
+        display: block;
+        width: 100%;
+        padding: 7px 10px;
+        font: inherit;
+        font-weight: 700;
+        color: #000;
+        background: #c9daf8;
+        border: 0;
+        border-radius: 0;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) {
+        background: #b7cdf3;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: progress;
+      }
+
+      #msg {
+        margin-top: 12px;
+        min-height: 56px;
+        font-size: 13px;
+        word-break: break-word;
+        text-align: center;
+      }
+      #msg.ok {
+        color: #1c6b35;
+      }
+      #msg.err {
+        color: #b00020;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="form" autocomplete="off" novalidate>
+      <h1>New campaign</h1>
+
+      <div class="row">
+        <label for="name">Name</label>
+        <input
+          id="name"
+          type="text"
+          placeholder="имя кампании"
+          maxlength="255"
+        />
+      </div>
+
+      <div class="row">
+        <label for="geo">Geo</label>
+        <input id="geo" type="text" placeholder="MX,AU,RO,..." />
+      </div>
+
+      <div class="row">
+        <label for="offer">Offer</label>
+        <div class="combo">
+          <textarea
+            id="offer"
+            rows="2"
+            placeholder="поиск по офферам с автокомплитом"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="offer-list"
+            aria-autocomplete="list"
+          ></textarea>
+          <ul id="offer-list" class="options" role="listbox" hidden></ul>
+        </div>
+      </div>
+
+      <button id="create" type="submit">Create</button>
+      <div id="msg" role="status"></div>
+    </form>
+
+    <script>
+      (() => {
+        const $ = (id) => document.getElementById(id);
+        const nameEl = $("name"),
+          geoEl = $("geo"),
+          offerEl = $("offer");
+        const listEl = $("offer-list"),
+          btn = $("create"),
+          msg = $("msg");
+
+        let selected = null; // выбранный оффер
+        let items = []; // текущие подсказки
+        let active = -1; // подсвеченный пункт
+        let timer = null;
+        let seq = 0; // защита от «опоздавших» ответов
+
+        const label = (o) =>
+          o.name.startsWith(`${o.id} `) || o.name === String(o.id)
+            ? o.name
+            : `${o.id} ${o.name}`;
+
+        async function api(path, options = {}) {
+          const res = await fetch(path, {
+            headers: { "Content-Type": "application/json" },
+            ...options,
+          });
+          let data = null;
+          try {
+            data = await res.json();
+          } catch (_) {}
+          if (!res.ok)
+            throw new Error(errorText(data) || `Ошибка ${res.status}`);
+          return data;
+        }
+
+        function errorText(data) {
+          const d = data && data.detail;
+          if (typeof d === "string") return d;
+          if (Array.isArray(d))
+            return d
+              .map((e) => String(e.msg || "").replace(/^Value error, /, ""))
+              .join("; ");
+          return "";
+        }
+
+        function showMsg(kind, ...nodes) {
+          msg.className = kind;
+          msg.replaceChildren(...nodes);
+        }
+
+        // ---------- список офферов ----------
+        function closeList() {
+          listEl.hidden = true;
+          offerEl.setAttribute("aria-expanded", "false");
+          active = -1;
+        }
+
+        function renderNote(text, isError) {
+          items = [];
+          active = -1;
+          const li = document.createElement("li");
+          li.className = "note" + (isError ? " error" : "");
+          li.textContent = text;
+          listEl.replaceChildren(li);
+          listEl.hidden = false;
+          offerEl.setAttribute("aria-expanded", "true");
+        }
+
+        function renderList(rows) {
+          if (!rows.length) return renderNote("Ничего не найдено");
+          items = rows;
+          active = -1;
+          listEl.replaceChildren(
+            ...rows.map((offer) => {
+              const li = document.createElement("li");
+              li.setAttribute("role", "option");
+              li.textContent = label(offer);
+              li.title = label(offer);
+              li.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                choose(offer);
+              });
+              return li;
+            }),
+          );
+          listEl.hidden = false;
+          offerEl.setAttribute("aria-expanded", "true");
+        }
+
+        function highlight(i) {
+          const lis = [...listEl.querySelectorAll("li[role=option]")];
+          lis.forEach((li, idx) => li.classList.toggle("active", idx === i));
+          if (lis[i]) lis[i].scrollIntoView({ block: "nearest" });
+          active = i;
+        }
+
+        function choose(offer) {
+          selected = offer;
+          offerEl.value = label(offer);
+          closeList();
+        }
+
+        async function loadOffers(query) {
+          const mine = ++seq;
+          const params = new URLSearchParams({ q: query, limit: "100" });
+          try {
+            const rows = await api(`/api/offers?${params}`);
+            if (mine === seq) renderList(rows);
+          } catch (err) {
+            if (mine === seq) renderNote(err.message, true);
+          }
+        }
+
+        offerEl.addEventListener("input", () => {
+          selected = null;
+          clearTimeout(timer);
+          timer = setTimeout(() => loadOffers(offerEl.value.trim()), 200);
+        });
+        offerEl.addEventListener("focus", () =>
+          loadOffers(selected ? "" : offerEl.value.trim()),
+        );
+        offerEl.addEventListener("blur", closeList);
+        offerEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (!listEl.hidden && active >= 0) choose(items[active]);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            if (listEl.hidden) loadOffers(offerEl.value.trim());
+            else highlight(Math.min(active + 1, items.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            highlight(Math.max(active - 1, 0));
+          } else if (e.key === "Escape") {
+            closeList();
+          }
+        });
+
+        // ---------- создание кампании ----------
+        $("form").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          msg.className = "";
+          msg.replaceChildren();
+
+          const name = nameEl.value.trim();
+          const geo = geoEl.value.trim();
+          const fail = (text, el) => {
+            showMsg("err", document.createTextNode(text));
+            el.focus();
+          };
+          if (!name) return fail("Укажите название кампании", nameEl);
+          if (!geo) return fail("Укажите гео, например MX,AU,RO", geoEl);
+          if (!selected)
+            return fail("Выберите оффер из выпадающего списка", offerEl);
+
+          btn.disabled = true;
+          btn.textContent = "Creating…";
+          try {
+            const c = await api("/api/campaigns", {
+              method: "POST",
+              body: JSON.stringify({ name, geo, offer_id: selected.id }),
+            });
+            showMsg(
+              "ok",
+              document.createTextNode(`Кампания #${c.keitaro_id} создана`),
+            );
+            nameEl.value = "";
+            geoEl.value = "";
+            offerEl.value = "";
+            selected = null;
+          } catch (err) {
+            showMsg("err", document.createTextNode(err.message));
+          } finally {
+            btn.disabled = false;
+            btn.textContent = "Create";
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
